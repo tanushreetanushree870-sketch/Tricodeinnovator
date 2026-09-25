@@ -97,8 +97,8 @@ export default function Matrix() {
   };
 
   const handleGenerate = async () => {
-    if (selected.length === 0) {
-      return toast.error('Please select at least 1 paper to analyze.');
+    if (selected.length < 2) {
+      return toast.error('Select at least 2 research papers to compare.');
     }
 
     setLoadingMatrix(true);
@@ -115,7 +115,10 @@ export default function Matrix() {
       }
     } catch (err) {
       console.error('[ResearchMatrix] Matrix generation error:', err);
-      const msg = err.response?.data?.message || 'Failed to generate research matrix';
+      const msg =
+        err.response?.data?.error?.message ||
+        err.response?.data?.message ||
+        'Failed to generate research matrix';
       setMatrixError(msg);
       toast.error(msg);
     } finally {
@@ -249,9 +252,9 @@ export default function Matrix() {
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={loadingMatrix || loadingSources || selected.length === 0}
+            disabled={loadingMatrix || loadingSources || selected.length < 2}
             className={`btn-primary w-full justify-center text-sm ${
-              selected.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+              selected.length < 2 ? 'opacity-50 cursor-not-allowed' : ''
             }`}
           >
             {loadingMatrix ? (
@@ -262,21 +265,16 @@ export default function Matrix() {
             ) : (
               <>
                 <Table2 size={14} />
-                <span>
-                  {selected.length === 0
-                    ? 'Select Papers to Compare'
-                    : selected.length === 1
-                    ? 'Compare (1)'
-                    : `Compare (${selected.length})`}
-                </span>
+                <span>Compare ({selected.length})</span>
               </>
             )}
           </button>
 
-          {/* Helpful guidance note */}
-          {selected.length === 1 && (
-            <p className="text-[11px] text-center mt-2 leading-tight" style={{ color: '#818cf8' }}>
-              Tip: Select 2 or more papers to generate a side-by-side comparison
+          {/* Validation guidance note when < 2 selected */}
+          {selected.length < 2 && sources.length > 0 && (
+            <p className="text-[12px] text-center mt-2.5 font-medium text-amber-400/90 flex items-center justify-center gap-1.5">
+              <AlertCircle size={13} className="shrink-0" />
+              <span>Select at least 2 research papers to compare.</span>
             </p>
           )}
         </div>
@@ -316,14 +314,14 @@ export default function Matrix() {
               <p className="text-sm text-slate-500 max-w-sm mb-4">
                 {sources.length === 0
                   ? 'Upload your first research paper from the Dashboard to start building research matrices.'
-                  : 'Select papers from the left panel and click "Compare" to view a structured side-by-side analysis.'}
+                  : 'Select at least 2 papers from the left panel and click "Compare" to view a structured side-by-side analysis.'}
               </p>
               {sources.length === 0 ? (
                 <Link to="/dashboard" className="btn-primary text-xs px-4 py-2">
                   Go to Dashboard →
                 </Link>
               ) : (
-                selected.length > 0 && (
+                selected.length >= 2 && (
                   <button
                     type="button"
                     onClick={handleGenerate}

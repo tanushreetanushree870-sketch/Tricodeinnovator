@@ -9,7 +9,7 @@ router.use(authenticate);
 
 // Schema for matrix request
 const matrixSchema = z.object({
-  source_ids: z.array(z.string().uuid()).min(1, 'At least one source required').max(10),
+  source_ids: z.array(z.string().uuid()).min(2, 'At least 2 research sources are required for comparison.').max(10),
 });
 
 // Schema for chat request
@@ -24,12 +24,28 @@ const chatSchema = z.object({
  * Returns comparative metadata table for selected sources
  */
 router.post('/matrix', async (req, res) => {
+  const sourceIds = req.body?.source_ids;
+  if (!sourceIds || !Array.isArray(sourceIds) || sourceIds.length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: 'At least 2 research sources are required for comparison.',
+      error: {
+        code: 'INSUFFICIENT_SOURCES',
+        message: 'At least 2 research sources are required for comparison.',
+      },
+    });
+  }
+
   const validation = matrixSchema.safeParse(req.body);
   if (!validation.success) {
     return res.status(400).json({
       success: false,
-      message: 'Validation failed',
-      errors: validation.error.errors,
+      message: validation.error.errors[0]?.message || 'Validation failed',
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: validation.error.errors[0]?.message || 'Validation failed',
+        details: validation.error.errors,
+      },
     });
   }
 
