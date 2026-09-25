@@ -166,7 +166,7 @@ const seedDemoData = async (poolInstance) => {
         [userId]
       );
       if (existingSources.rows.length === 0) {
-        const demoSourceId = '11111111-1111-1111-1111-111111111111';
+        const demoSourceId = crypto.randomUUID();
         const demoMetadata = {
           title: 'YouTube Video: xKxo-GrmzE0',
           url: 'https://www.youtube.com/watch?v=xKxo-GrmzE0',

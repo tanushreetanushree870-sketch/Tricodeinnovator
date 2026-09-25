@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -38,8 +38,11 @@ export default function Dashboard() {
   const [copiedChunkId, setCopiedChunkId] = useState(null);
   const [retryingId, setRetryingId] = useState(null);
 
+  const isFetchingRef = useRef(false);
+
   const fetchSources = async () => {
-    if (loadingSources) return;
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     setLoadingSources(true);
     setSourcesError(null);
     console.log('[KnowledgeLibrary] Loading sources...');
@@ -56,6 +59,7 @@ export default function Dashboard() {
       setSourcesError('Unable to load your knowledge library. Please try again.');
       toast.error('Unable to load your knowledge library. Please try again.');
     } finally {
+      isFetchingRef.current = false;
       setLoadingSources(false);
     }
   };
@@ -87,8 +91,13 @@ export default function Dashboard() {
         status: err.response?.status,
         data: err.response?.data,
       });
+      if (err.response?.status === 404) {
+        toast.error('Source not found on server. Refreshing knowledge library...');
+        fetchSources();
+      } else {
+        toast.error('Unable to open this source.');
+      }
       setDetailsError('Unable to open this source.');
-      toast.error('Unable to open this source.');
     } finally {
       setLoadingDetails(false);
     }

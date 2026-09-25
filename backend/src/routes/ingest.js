@@ -406,7 +406,43 @@ router.get('/sources', async (req, res) => {
  */
 router.get('/sources/:sourceId', async (req, res) => {
   const { sourceId } = req.params;
+  const userId = req.user?.id;
+
+  console.log('[SourceDetails] Request received');
+  console.log('[SourceDetails] source_id:', sourceId);
+  console.log('[SourceDetails] authenticated_user_id:', userId);
+
   try {
+    // Check if source exists at all (regardless of user) to distinguish 404 vs 403
+    const existsRes = await query(
+      `SELECT id, user_id FROM uploaded_sources WHERE id = $1`,
+      [sourceId]
+    );
+
+    const sourceFound = existsRes.rows.length > 0;
+    const sourceOwner = sourceFound ? existsRes.rows[0].user_id : null;
+    console.log('[SourceDetails] source_found:', sourceFound);
+    console.log('[SourceDetails] source_owner:', sourceOwner);
+
+    if (!sourceFound) {
+      console.log('[SourceDetails] error: Source not found');
+      return res.status(404).json({
+        success: false,
+        message: 'Source not found.',
+        detail: 'Source not found'
+      });
+    }
+
+    if (sourceOwner !== userId) {
+      console.log('[SourceDetails] error: Unauthorized access - source belongs to different user');
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden. You do not have access to this research source.',
+        detail: 'Forbidden'
+      });
+    }
+
+    // Retrieve full source data for authorized user
     const sourceRes = await query(
       `SELECT us.id, 
               COALESCE(us.source_type, 'document') as source_type, 
@@ -420,12 +456,8 @@ router.get('/sources/:sourceId', async (req, res) => {
               us.created_at
        FROM uploaded_sources us
        WHERE us.id = $1 AND us.user_id = $2`,
-      [sourceId, req.user.id]
+      [sourceId, userId]
     );
-
-    if (sourceRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Source not found.' });
-    }
 
     const source = sourceRes.rows[0];
 
@@ -437,7 +469,7 @@ router.get('/sources/:sourceId', async (req, res) => {
       }
     }
 
-    // Fetch associated chunks
+    // Fetch associated chunks from source_embeddings
     const chunksRes = await query(
       `SELECT id, chunk_content, page_or_timestamp
        FROM source_embeddings
@@ -445,6 +477,8 @@ router.get('/sources/:sourceId', async (req, res) => {
        ORDER BY id ASC`,
       [sourceId]
     );
+
+    console.log('[SourceDetails] chunks_count:', chunksRes.rows.length);
 
     res.json({
       success: true,
@@ -455,7 +489,7 @@ router.get('/sources/:sourceId', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(`Get source details error for ${sourceId}:`, error.message);
+    console.error('[SourceDetails] error:', error.message);
     res.status(500).json({ success: false, message: `Failed to fetch source details: ${error.message}` });
   }
 });
