@@ -8,6 +8,8 @@ node_modules/
 !.env.example
 backend/.env
 frontend/.env
+# Allow frontend production env (no secrets - only public API URL)
+!frontend/.env.production
 
 # Build outputs
 dist/

@@ -23,16 +23,34 @@ app.use(helmet({
 }));
 
 // ─── CORS Configuration ──────────────────────────────────────────────────────
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5174',
+].filter(Boolean);
+
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:3000',
-    'http://localhost:5174',
-  ],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. curl, mobile apps)
+    if (!origin) return callback(null, true);
+    // Allow any Vercel deployment URL or explicitly listed origins
+    if (
+      allowedOrigins.includes(origin) ||
+      /\.vercel\.app$/.test(origin) ||
+      process.env.CORS_ALLOW_ALL === 'true'
+    ) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
+
+// Pre-flight for all routes
+app.options('*', cors());
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 const apiLimiter = rateLimit({

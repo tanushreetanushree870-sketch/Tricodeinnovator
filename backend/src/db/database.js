@@ -7,12 +7,19 @@ dotenv.config();
 
 const { Pool } = pg;
 
+// Supabase / any external Postgres always needs SSL; enable it unless
+// explicitly disabled (e.g. local Docker without SSL).
+const needsSsl =
+  process.env.DATABASE_URL?.includes('supabase.co') ||
+  process.env.DATABASE_URL?.includes('supabase.in') ||
+  process.env.NODE_ENV === 'production';
+
 let activePool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: needsSsl ? { rejectUnauthorized: false } : false,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000,
 });
 
 activePool.on('error', (err) => {
