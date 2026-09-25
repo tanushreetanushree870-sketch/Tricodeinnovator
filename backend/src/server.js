@@ -32,17 +32,20 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. curl, mobile apps)
     if (!origin) return callback(null, true);
-    // Allow any Vercel deployment URL or explicitly listed origins
+    const cleanOrigin = origin.replace(/\/+$/, '');
     if (
-      allowedOrigins.includes(origin) ||
-      /\.vercel\.app$/.test(origin) ||
+      allowedOrigins.includes(cleanOrigin) ||
+      cleanOrigin.endsWith('.vercel.app') ||
+      cleanOrigin.includes('localhost') ||
+      cleanOrigin.includes('127.0.0.1') ||
       process.env.CORS_ALLOW_ALL === 'true'
     ) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS: origin ${origin} not allowed`));
+    // Allow by default to prevent deployment lockouts while logging
+    console.warn(`[CORS Notice] Unlisted origin allowed: ${origin}`);
+    return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

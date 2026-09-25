@@ -54,23 +54,33 @@ export const getClient = async () => {
 // Seed initial demo data for immediate exploration
 const seedDemoData = async (poolInstance) => {
   try {
-    const existing = await poolInstance.query('SELECT id FROM users LIMIT 1');
+    const existing = await poolInstance.query('SELECT id FROM users WHERE email = $1', ['demo@researchpilot.ai']);
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash('password123', salt);
+    let userId;
+
     if (existing.rows.length === 0) {
       console.log('🌱 Seeding demo user and academic profile...');
-      const salt = await bcrypt.genSalt(10);
-      const hash = await bcrypt.hash('password123', salt);
       const userRes = await poolInstance.query(
         `INSERT INTO users (email, password_hash, full_name)
          VALUES ($1, $2, $3) RETURNING id`,
         ['demo@researchpilot.ai', hash, 'Dr. Alex Vance']
       );
-      const userId = userRes.rows[0].id;
+      userId = userRes.rows[0].id;
 
       await poolInstance.query(
         `INSERT INTO gamification_profiles (user_id, total_xp, weekly_xp, current_level, current_streak, league_tier, trees_grown)
-         VALUES ($1, 1420, 320, 5, 12, 'Silver', 8)`,
+         VALUES ($1, 1420, 320, 5, 12, 'Silver', 8)
+         ON CONFLICT (user_id) DO NOTHING`,
         [userId]
       );
+    } else {
+      userId = existing.rows[0].id;
+      await poolInstance.query(
+        `UPDATE users SET password_hash = $1 WHERE id = $2`,
+        [hash, userId]
+      );
+    }
 
       // Seed sample course
       await poolInstance.query(
