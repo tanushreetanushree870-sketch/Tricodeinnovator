@@ -160,7 +160,6 @@ const seedDemoData = async (poolInstance) => {
         );
       }
       console.log('✅ Demo user seeded: demo@researchpilot.ai / password123');
-    }
   } catch (err) {
     console.warn('Notice during demo seeding:', err.message);
   }

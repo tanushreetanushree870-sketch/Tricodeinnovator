@@ -93,10 +93,11 @@ router.post('/generate', async (req, res) => {
 
   try {
     // Fetch source texts
+    const placeholders = source_ids.map((_, i) => `$${i + 1}`).join(', ');
     const sourcesResult = await query(
       `SELECT id, title, raw_text FROM uploaded_sources
-       WHERE id = ANY($1) AND user_id = $2 AND raw_text IS NOT NULL`,
-      [source_ids, req.user.id]
+       WHERE id IN (${placeholders}) AND user_id = $${source_ids.length + 1} AND raw_text IS NOT NULL`,
+      [...source_ids, req.user.id]
     );
 
     if (sourcesResult.rows.length === 0) {

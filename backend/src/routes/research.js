@@ -36,32 +36,50 @@ router.post('/matrix', async (req, res) => {
   const { source_ids } = validation.data;
 
   try {
-    // Fetch sources belonging to user
+    console.log(`[ResearchMatrix] User ID: ${req.user.id}`);
+    console.log(`[ResearchMatrix] Fetching sources for matrix:`, source_ids);
+
+    // Fetch sources belonging to user using IN clause for universal SQL / pg-mem compatibility
+    const placeholders = source_ids.map((_, i) => `$${i + 1}`).join(', ');
     const result = await query(
       `SELECT id, title, source_type, parsed_metadata, storage_url, created_at
        FROM uploaded_sources
-       WHERE id = ANY($1) AND user_id = $2
+       WHERE id IN (${placeholders}) AND user_id = $${source_ids.length + 1}
        ORDER BY created_at DESC`,
-      [source_ids, req.user.id]
+      [...source_ids, req.user.id]
     );
 
+    console.log(`[ResearchMatrix] Matched source rows: ${result.rows.length}`);
+
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'No sources found.' });
+      return res.status(404).json({
+        success: false,
+        message: 'No sources found for the selected IDs. Please ensure the papers are in your library.',
+      });
     }
 
     // Format comparison matrix
     const matrix = result.rows.map(source => {
-      const meta = source.parsed_metadata || {};
+      let meta = source.parsed_metadata;
+      if (typeof meta === 'string') {
+        try {
+          meta = JSON.parse(meta);
+        } catch {
+          meta = {};
+        }
+      }
+      meta = meta || {};
+
       return {
         id: source.id,
-        title: source.title,
-        source_type: source.source_type,
+        title: source.title || 'Untitled Research Asset',
+        source_type: source.source_type || 'Paper',
         methodology: meta.methodology || 'Not specified',
         datasets: meta.datasets || 'Not specified',
         results: meta.results || 'Not specified',
         limitations: meta.limitations || 'Not specified',
-        keywords: meta.keywords || [],
-        research_type: meta.research_type || 'unknown',
+        keywords: Array.isArray(meta.keywords) ? meta.keywords : [],
+        research_type: meta.research_type || 'Empirical',
         year: meta.year || null,
         authors: meta.authors || null,
         abstract_summary: meta.abstract_summary || '',
@@ -78,7 +96,7 @@ router.post('/matrix', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Matrix error:', error.message);
+    console.error('[ResearchMatrix] Matrix error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to generate research matrix.' });
   }
 });
@@ -109,6 +127,7 @@ router.post('/chat', async (req, res) => {
 
     if (source_ids && source_ids.length > 0) {
       // Search within specific sources
+      const placeholders = source_ids.map((_, i) => `$${i + 3}`).join(', ');
       vectorQuery = `
         SELECT
           se.chunk_content,
@@ -119,11 +138,11 @@ router.post('/chat', async (req, res) => {
         FROM source_embeddings se
         JOIN uploaded_sources us ON us.id = se.source_id
         WHERE us.user_id = $2
-          AND se.source_id = ANY($3)
+          AND se.source_id IN (${placeholders})
         ORDER BY se.embedding <-> $1::vector
-        LIMIT $4
+        LIMIT $${source_ids.length + 3}
       `;
-      queryParams = [embeddingStr, req.user.id, source_ids, top_k];
+      queryParams = [embeddingStr, req.user.id, ...source_ids, top_k];
     } else {
       // Search across all user's sources
       vectorQuery = `
@@ -147,19 +166,22 @@ router.post('/chat', async (req, res) => {
       chunksResult = await query(vectorQuery, queryParams);
     } catch (vecErr) {
       console.warn('Vector search notice, using content chunk retrieval:', vecErr.message?.slice(0, 100));
+      const fbPlaceholders = source_ids && source_ids.length > 0
+        ? source_ids.map((_, i) => `$${i + 2}`).join(', ')
+        : '';
       const fallbackQuery = (source_ids && source_ids.length > 0)
         ? `SELECT se.chunk_content, se.page_or_timestamp, us.title as source_title, us.id as source_id, 0.85 as similarity_score
            FROM source_embeddings se
            JOIN uploaded_sources us ON us.id = se.source_id
-           WHERE us.user_id = $1 AND se.source_id = ANY($2)
-           LIMIT $3`
+           WHERE us.user_id = $1 AND se.source_id IN (${fbPlaceholders})
+           LIMIT $${source_ids.length + 2}`
         : `SELECT se.chunk_content, se.page_or_timestamp, us.title as source_title, us.id as source_id, 0.85 as similarity_score
            FROM source_embeddings se
            JOIN uploaded_sources us ON us.id = se.source_id
            WHERE us.user_id = $1
            LIMIT $2`;
       const fallbackParams = (source_ids && source_ids.length > 0)
-        ? [req.user.id, source_ids, top_k]
+        ? [req.user.id, ...source_ids, top_k]
         : [req.user.id, top_k];
       chunksResult = await query(fallbackQuery, fallbackParams);
     }
@@ -233,8 +255,9 @@ router.post('/gaps', async (req, res) => {
     let sourcesParams;
 
     if (source_ids && source_ids.length > 0) {
-      sourcesQuery = `SELECT id, title, parsed_metadata FROM uploaded_sources WHERE user_id = $1 AND id = ANY($2)`;
-      sourcesParams = [req.user.id, source_ids];
+      const placeholders = source_ids.map((_, i) => `$${i + 2}`).join(', ');
+      sourcesQuery = `SELECT id, title, parsed_metadata FROM uploaded_sources WHERE user_id = $1 AND id IN (${placeholders})`;
+      sourcesParams = [req.user.id, ...source_ids];
     } else {
       sourcesQuery = `SELECT id, title, parsed_metadata FROM uploaded_sources WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`;
       sourcesParams = [req.user.id];
@@ -248,13 +271,19 @@ router.post('/gaps', async (req, res) => {
 
     // Prepare limitations data
     const limitationsData = sourcesResult.rows
-      .filter(s => s.parsed_metadata && s.parsed_metadata.limitations)
-      .map(s => ({
-        title: s.title,
-        limitations: s.parsed_metadata.limitations,
-        methodology: s.parsed_metadata.methodology || '',
-        results: s.parsed_metadata.results || '',
-      }));
+      .map(s => {
+        let meta = s.parsed_metadata;
+        if (typeof meta === 'string') {
+          try { meta = JSON.parse(meta); } catch { meta = {}; }
+        }
+        return {
+          title: s.title,
+          limitations: meta?.limitations || '',
+          methodology: meta?.methodology || '',
+          results: meta?.results || '',
+        };
+      })
+      .filter(s => s.limitations && s.limitations.trim().length > 0);
 
     if (limitationsData.length === 0) {
       return res.json({
