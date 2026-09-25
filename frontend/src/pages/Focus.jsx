@@ -78,10 +78,39 @@ export default function Focus() {
   const [showSettings, setShowSettings] = useState(false);
   const intervalRef = useRef(null);
 
-  const totalSeconds = workMinutes * 60;
-  const progress = ((totalSeconds - timeLeft) / totalSeconds) * 100;
+  const currentTotalSeconds = (phase === 'work' ? workMinutes : preset.break) * 60;
+  const progress = Math.min(100, Math.max(0, ((currentTotalSeconds - timeLeft) / (currentTotalSeconds || 1)) * 100));
   const minutes = Math.floor(timeLeft / 60);
   const seconds = timeLeft % 60;
+
+  const handleTimerComplete = useCallback(async () => {
+    setIsRunning(false);
+    if (phase === 'work') {
+      toast.success('🌳 Focus session complete! Tree grown!', { duration: 4000 });
+      setSessionsCompleted(prev => prev + 1);
+      setTreesThisSession(prev => prev + 1);
+      try {
+        const res = await courseAPI.completeFocus({
+          duration_minutes: workMinutes,
+          session_type: preset.type,
+        });
+        updateGamification(prev => ({
+          ...prev,
+          trees_grown: (prev?.trees_grown || 0) + 1,
+          total_xp: (prev?.total_xp || 0) + (res.data?.data?.xp_earned || 25),
+        }));
+      } catch (err) {
+        console.warn('Notice updating focus completion:', err.message);
+      }
+      // Switch to break
+      setPhase('break');
+      setTimeLeft(preset.break * 60);
+    } else {
+      toast('☀️ Break over! Ready for another session?');
+      setPhase('work');
+      setTimeLeft(workMinutes * 60);
+    }
+  }, [phase, workMinutes, preset, updateGamification]);
 
   useEffect(() => {
     if (isRunning) {
@@ -99,48 +128,45 @@ export default function Focus() {
       clearInterval(intervalRef.current);
     }
     return () => clearInterval(intervalRef.current);
-  }, [isRunning, preset]);
+  }, [isRunning, handleTimerComplete]);
 
-  const handleTimerComplete = async () => {
-    setIsRunning(false);
-    if (phase === 'work') {
-      toast.success('🌳 Focus session complete! Tree grown!', { duration: 4000 });
-      setSessionsCompleted(prev => prev + 1);
-      setTreesThisSession(prev => prev + 1);
-      try {
-        const res = await courseAPI.completeFocus({
-          duration_minutes: workMinutes,
-          session_type: preset.type,
-        });
-        updateGamification(prev => ({
-          ...prev,
-          trees_grown: (prev?.trees_grown || 0) + 1,
-          total_xp: (prev?.total_xp || 0) + res.data.data.xp_earned,
-        }));
-      } catch {}
-      // Switch to break
-      setPhase('break');
-      setTimeLeft(preset.break * 60);
+  const switchMode = (newPhase) => {
+    console.log(`[FocusTimer] Current mode: ${phase}`);
+    if (newPhase === 'break') {
+      console.log('[FocusTimer] Break button clicked');
+      console.log('[FocusTimer] Switching to break');
     } else {
-      toast('☀️ Break over! Ready for another session?');
-      setPhase('work');
-      setTimeLeft(preset.work * 60);
+      console.log('[FocusTimer] Focus button clicked');
+      console.log('[FocusTimer] Switching to focus');
     }
+
+    if (phase === newPhase) return;
+
+    setIsRunning(false);
+    clearInterval(intervalRef.current);
+    setPhase(newPhase);
+
+    const newDuration = (newPhase === 'work' ? workMinutes : preset.break) * 60;
+    setTimeLeft(newDuration);
+
+    console.log(`[FocusTimer] Timer duration: ${newDuration}`);
+    console.log(`[FocusTimer] Timer running: false`);
   };
 
   const resetTimer = () => {
     setIsRunning(false);
     clearInterval(intervalRef.current);
-    setTimeLeft(workMinutes * 60);
-    setPhase('work');
+    const duration = (phase === 'work' ? workMinutes : preset.break) * 60;
+    setTimeLeft(duration);
   };
 
   const applyPreset = (p) => {
     setPreset(p);
     setWorkMinutes(p.work);
-    setTimeLeft(p.work * 60);
     setIsRunning(false);
-    setPhase('work');
+    clearInterval(intervalRef.current);
+    const duration = (phase === 'work' ? p.work : p.break) * 60;
+    setTimeLeft(duration);
   };
 
   // Render a small forest from grown trees
@@ -159,18 +185,39 @@ export default function Focus() {
         {/* Timer */}
         <div className="lg:col-span-2">
           <div className="glass-card p-8 text-center">
-            {/* Phase Indicator */}
+            {/* Phase Mode Selector: 🎯 Focus & ☕ Break */}
             <div className="flex gap-3 justify-center mb-6">
-              {['work', 'break'].map(p => (
-                <div key={p} className="px-4 py-1.5 rounded-full text-sm font-medium capitalize"
-                  style={{
-                    background: phase === p ? (p === 'work' ? 'rgba(99,102,241,0.2)' : 'rgba(16,185,129,0.2)') : 'rgba(255,255,255,0.03)',
-                    color: phase === p ? (p === 'work' ? '#818cf8' : '#34d399') : '#64748b',
-                    border: `1px solid ${phase === p ? (p === 'work' ? 'rgba(99,102,241,0.4)' : 'rgba(16,185,129,0.4)') : 'transparent'}`,
-                  }}>
-                  {p === 'work' ? '🎯 Focus' : '☕ Break'}
-                </div>
-              ))}
+              <button
+                type="button"
+                id="focus-mode-btn"
+                onClick={() => switchMode('work')}
+                className="px-5 py-2 rounded-full text-sm font-semibold transition-all flex items-center gap-2 cursor-pointer select-none"
+                style={{
+                  background: phase === 'work' ? 'rgba(99,102,241,0.25)' : 'rgba(255,255,255,0.03)',
+                  color: phase === 'work' ? '#818cf8' : '#94a3b8',
+                  border: `1px solid ${phase === 'work' ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                  boxShadow: phase === 'work' ? '0 0 20px rgba(99,102,241,0.25)' : 'none',
+                }}
+              >
+                <span>🎯</span>
+                <span>Focus</span>
+              </button>
+
+              <button
+                type="button"
+                id="break-mode-btn"
+                onClick={() => switchMode('break')}
+                className="px-5 py-2 rounded-full text-sm font-semibold transition-all flex items-center gap-2 cursor-pointer select-none"
+                style={{
+                  background: phase === 'break' ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.03)',
+                  color: phase === 'break' ? '#34d399' : '#94a3b8',
+                  border: `1px solid ${phase === 'break' ? 'rgba(16,185,129,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                  boxShadow: phase === 'break' ? '0 0 20px rgba(16,185,129,0.25)' : 'none',
+                }}
+              >
+                <span>☕</span>
+                <span>Break</span>
+              </button>
             </div>
 
             {/* Animated Tree */}
@@ -184,43 +231,114 @@ export default function Focus() {
               </div>
               {/* Circular progress hint */}
               <div className="xp-bar mt-3 w-64 mx-auto">
-                <div className="xp-bar-fill" style={{ width: `${progress}%` }} />
+                <div className="xp-bar-fill" style={{ width: `${progress}%`, background: phase === 'work' ? undefined : 'linear-gradient(90deg,#10b981,#34d399)' }} />
               </div>
             </div>
 
             {/* Controls */}
             <div className="flex items-center justify-center gap-4">
               <button onClick={resetTimer}
-                className="w-12 h-12 rounded-full flex items-center justify-center transition-all"
+                title="Reset timer"
+                className="w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer"
                 style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8' }}>
                 <RotateCcw size={18} />
               </button>
               <button onClick={() => setIsRunning(!isRunning)}
-                className="w-20 h-20 rounded-full flex items-center justify-center transition-all text-white pulse-glow"
+                title={isRunning ? 'Pause' : 'Start'}
+                className="w-20 h-20 rounded-full flex items-center justify-center transition-all text-white pulse-glow cursor-pointer"
                 style={{
-                  background: isRunning ? 'linear-gradient(135deg,#ef4444,#f97316)' : 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-                  boxShadow: isRunning ? '0 0 30px rgba(239,68,68,0.4)' : '0 0 30px rgba(99,102,241,0.4)',
+                  background: isRunning
+                    ? 'linear-gradient(135deg,#ef4444,#f97316)'
+                    : phase === 'work'
+                    ? 'linear-gradient(135deg,#6366f1,#8b5cf6)'
+                    : 'linear-gradient(135deg,#10b981,#059669)',
+                  boxShadow: isRunning
+                    ? '0 0 30px rgba(239,68,68,0.4)'
+                    : phase === 'work'
+                    ? '0 0 30px rgba(99,102,241,0.4)'
+                    : '0 0 30px rgba(16,185,129,0.4)',
                 }}>
-                {isRunning ? <Pause size={28} /> : <Play size={28} />}
+                {isRunning ? <Pause size={28} /> : <Play size={28} className="translate-x-0.5" />}
               </button>
               <button onClick={() => setShowSettings(!showSettings)}
-                className="w-12 h-12 rounded-full flex items-center justify-center transition-all"
-                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8' }}>
+                title="Timer settings"
+                className="w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer"
+                style={{
+                  background: showSettings ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${showSettings ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                  color: showSettings ? '#818cf8' : '#94a3b8'
+                }}>
                 <Settings size={18} />
               </button>
             </div>
+
+            {/* Custom Duration Settings Popover */}
+            <AnimatePresence>
+              {showSettings && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="mt-6 p-4 rounded-xl text-left"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}
+                >
+                  <h4 className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-1.5">
+                    <Settings size={14} className="text-indigo-400" />
+                    <span>Custom Durations</span>
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Focus Duration (min)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="180"
+                        value={workMinutes}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseInt(e.target.value) || 25);
+                          setWorkMinutes(val);
+                          if (phase === 'work' && !isRunning) {
+                            setTimeLeft(val * 60);
+                          }
+                        }}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs text-white"
+                        style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(99,102,241,0.3)' }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Break Duration (min)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        value={preset.break}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseInt(e.target.value) || 5);
+                          setPreset((prev) => ({ ...prev, break: val }));
+                          if (phase === 'break' && !isRunning) {
+                            setTimeLeft(val * 60);
+                          }
+                        }}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs text-white"
+                        style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(16,185,129,0.3)' }}
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Presets */}
             <div className="flex gap-3 justify-center mt-6">
               {PRESETS.map(p => (
                 <button key={p.label} onClick={() => applyPreset(p)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer"
                   style={{
-                    background: preset.label === p.label ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.03)',
-                    color: preset.label === p.label ? '#818cf8' : '#64748b',
-                    border: `1px solid ${preset.label === p.label ? 'rgba(99,102,241,0.3)' : 'rgba(99,102,241,0.08)'}`,
+                    background: preset.label === p.label ? (phase === 'work' ? 'rgba(99,102,241,0.2)' : 'rgba(16,185,129,0.2)') : 'rgba(255,255,255,0.03)',
+                    color: preset.label === p.label ? (phase === 'work' ? '#818cf8' : '#34d399') : '#64748b',
+                    border: `1px solid ${preset.label === p.label ? (phase === 'work' ? 'rgba(99,102,241,0.4)' : 'rgba(16,185,129,0.4)') : 'rgba(255,255,255,0.08)'}`,
                   }}>
-                  {p.label} ({p.work}m)
+                  {p.label} ({phase === 'work' ? p.work : p.break}m)
                 </button>
               ))}
             </div>
