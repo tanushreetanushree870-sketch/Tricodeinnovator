@@ -405,59 +405,104 @@ router.get('/league/leaderboard', async (req, res) => {
   try {
     const result = await query(
       `SELECT
+        u.id as user_id,
         u.full_name,
         u.email,
-        gp.total_xp,
-        gp.weekly_xp,
-        gp.current_level,
-        gp.current_streak,
-        gp.league_tier,
-        gp.trees_grown,
-        RANK() OVER (PARTITION BY gp.league_tier ORDER BY gp.weekly_xp DESC) as rank_in_tier,
-        RANK() OVER (ORDER BY gp.weekly_xp DESC) as global_rank
-       FROM gamification_profiles gp
-       JOIN users u ON u.id = gp.user_id
-       ORDER BY gp.weekly_xp DESC
+        COALESCE(gp.total_xp, 0) as total_xp,
+        COALESCE(gp.weekly_xp, 0) as weekly_xp,
+        COALESCE(gp.current_level, 1) as current_level,
+        COALESCE(gp.current_streak, 0) as current_streak,
+        COALESCE(gp.league_tier, 'Bronze') as league_tier,
+        COALESCE(gp.trees_grown, 0) as trees_grown
+       FROM users u
+       JOIN gamification_profiles gp ON gp.user_id = u.id
+       ORDER BY gp.weekly_xp DESC, gp.total_xp DESC
        LIMIT 100`,
       []
     );
 
     // Group by tier
     const tiers = { Diamond: [], Gold: [], Silver: [], Bronze: [] };
-    for (const row of result.rows) {
-      const tier = row.league_tier || 'Bronze';
+
+    // Sort by weekly_xp DESC, then total_xp DESC
+    const sortedUsers = [...result.rows].sort((a, b) => {
+      const diffWeekly = Number(b.weekly_xp || 0) - Number(a.weekly_xp || 0);
+      if (diffWeekly !== 0) return diffWeekly;
+      return Number(b.total_xp || 0) - Number(a.total_xp || 0);
+    });
+
+    let currentUserRank = null;
+
+    sortedUsers.forEach((row, globalIdx) => {
+      let tier = row.league_tier;
+      if (!['Diamond', 'Gold', 'Silver', 'Bronze'].includes(tier)) {
+        tier = calculateLeagueTier(Number(row.weekly_xp) || 0);
+      }
+
+      const global_rank = globalIdx + 1;
+      const rank_in_tier = (tiers[tier]?.length || 0) + 1;
+
+      const entry = {
+        user_id: row.user_id,
+        full_name: row.full_name || 'Anonymous Researcher',
+        email: (row.email || '').replace(/(.{2}).*@/, '$1***@'),
+        total_xp: Number(row.total_xp) || 0,
+        weekly_xp: Number(row.weekly_xp) || 0,
+        current_level: Number(row.current_level) || 1,
+        current_streak: Number(row.current_streak) || 0,
+        league_tier: tier,
+        trees_grown: Number(row.trees_grown) || 0,
+        rank_in_tier,
+        global_rank,
+      };
+
       if (tiers[tier]) {
-        tiers[tier].push({
-          full_name: row.full_name,
-          email: row.email.replace(/(.{2}).*@/, '$1***@'), // Partially mask email
-          total_xp: row.total_xp,
-          weekly_xp: row.weekly_xp,
-          current_level: row.current_level,
-          current_streak: row.current_streak,
-          trees_grown: row.trees_grown,
-          rank_in_tier: parseInt(row.rank_in_tier),
-          global_rank: parseInt(row.global_rank),
-        });
+        tiers[tier].push(entry);
+      }
+
+      if (req.user && row.user_id === req.user.id) {
+        currentUserRank = {
+          user_id: row.user_id,
+          weekly_xp: entry.weekly_xp,
+          total_xp: entry.total_xp,
+          league_tier: tier,
+          global_rank,
+          rank_in_tier,
+        };
+      }
+    });
+
+    // If current user wasn't in the top 100, fetch their individual rank
+    if (!currentUserRank && req.user) {
+      const userProfile = await query(
+        `SELECT u.full_name, u.email, gp.total_xp, gp.weekly_xp, gp.current_level, gp.current_streak, gp.league_tier, gp.trees_grown
+         FROM gamification_profiles gp
+         JOIN users u ON u.id = gp.user_id
+         WHERE gp.user_id = $1`,
+        [req.user.id]
+      );
+      if (userProfile.rows.length > 0) {
+        const uRow = userProfile.rows[0];
+        const tier = ['Diamond', 'Gold', 'Silver', 'Bronze'].includes(uRow.league_tier)
+          ? uRow.league_tier
+          : calculateLeagueTier(Number(uRow.weekly_xp) || 0);
+        currentUserRank = {
+          user_id: req.user.id,
+          weekly_xp: Number(uRow.weekly_xp) || 0,
+          total_xp: Number(uRow.total_xp) || 0,
+          league_tier: tier,
+          global_rank: sortedUsers.length + 1,
+          rank_in_tier: (tiers[tier]?.length || 0) + 1,
+        };
       }
     }
-
-    // Find current user's rank
-    const userRank = await query(
-      `SELECT gp.weekly_xp, gp.league_tier,
-              RANK() OVER (ORDER BY gp2.weekly_xp DESC) as global_rank
-       FROM gamification_profiles gp
-       CROSS JOIN (SELECT weekly_xp FROM gamification_profiles ORDER BY weekly_xp DESC) gp2
-       WHERE gp.user_id = $1
-       LIMIT 1`,
-      [req.user.id]
-    );
 
     res.json({
       success: true,
       data: {
         leaderboard: tiers,
-        total_users: result.rows.length,
-        current_user_rank: userRank.rows[0] || null,
+        total_users: sortedUsers.length,
+        current_user_rank: currentUserRank,
         tier_thresholds: {
           Bronze: '0 - 399 weekly XP',
           Silver: '400 - 999 weekly XP',
