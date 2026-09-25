@@ -9,28 +9,47 @@ const apiKey = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'you
 
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
-// Preferred model fallback cascade
-const FLASH_MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+// Preferred model fallback cascade with modern, active models
+const FLASH_MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash'];
 
 /**
- * Robust content generation with multi-model fallback and transient error retry
+ * Timeout helper ensuring promises never hang indefinitely
+ */
+const withTimeout = (promise, ms, fallbackVal = null) => {
+  let timer;
+  const timeoutPromise = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      resolve(fallbackVal);
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timer);
+  });
+};
+
+/**
+ * Robust content generation with multi-model fallback and strict timeouts
  */
 const generateWithModelFallback = async (prompt, config = {}) => {
   if (!ai) return null;
 
   for (const model of FLASH_MODELS) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config,
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: prompt,
+          config,
+        }),
+        7000,
+        null
+      );
       if (response && response.text) {
         return response.text;
       }
     } catch (err) {
-      console.warn(`Model ${model} warning: ${err.message?.slice(0, 120)}`);
-      // If 503 high demand or 404, continue to next fallback model
+      console.warn(`Model ${model} notice: ${err.message?.slice(0, 100)}`);
     }
   }
   return null;
@@ -57,32 +76,36 @@ const createDeterministicEmbedding = (text, dimensions = 768) => {
 };
 
 /**
- * Generate text embeddings using gemini-embedding-001 with 768 dimensions
+ * Generate text embeddings using gemini-embedding-001 with strict timeout
  */
 export const generateEmbedding = async (text) => {
   if (ai) {
     try {
-      const response = await ai.models.embedContent({
-        model: 'gemini-embedding-001',
-        contents: text.substring(0, 8192),
-        config: { outputDimensionality: 768 },
-      });
+      const response = await withTimeout(
+        ai.models.embedContent({
+          model: 'gemini-embedding-001',
+          contents: text.substring(0, 8192),
+          config: { outputDimensionality: 768 },
+        }),
+        4500,
+        null
+      );
       if (response?.embeddings?.[0]?.values) {
         return response.embeddings[0].values;
       }
     } catch (error) {
-      console.warn('Gemini embedding notice, falling back to deterministic embedding:', error.message?.slice(0, 100));
+      console.warn('Embedding API notice, using deterministic fallback:', error.message?.slice(0, 80));
     }
   }
   return createDeterministicEmbedding(text, 768);
 };
 
 /**
- * Generate multiple embeddings in batch
+ * Generate multiple embeddings in batch with timeout & fallback
  */
 export const generateBatchEmbeddings = async (texts) => {
   const embeddings = [];
-  const batchSize = 5;
+  const batchSize = 6;
 
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);
@@ -92,7 +115,7 @@ export const generateBatchEmbeddings = async (texts) => {
     embeddings.push(...batchResults);
 
     if (i + batchSize < texts.length) {
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise(resolve => setTimeout(resolve, 80));
     }
   }
 

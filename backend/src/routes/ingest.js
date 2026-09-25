@@ -47,79 +47,112 @@ router.post('/file', upload.array('files', 10), handleMulterError, async (req, r
   const errors = [];
 
   for (const file of req.files) {
-    try {
-      const ext = '.' + file.originalname.split('.').pop().toLowerCase();
-      let rawText = '';
-      let sourceType = 'text';
+    let sourceId = null;
+    const title = file.originalname.replace(/\.[^/.]+$/, '');
+    const ext = '.' + file.originalname.split('.').pop().toLowerCase();
+    let sourceType = 'text';
+    if (ext === '.pdf') sourceType = 'pdf';
+    else if (['.ppt', '.pptx'].includes(ext)) sourceType = 'ppt';
+    else if (['.mp3', '.mp4', '.wav', '.ogg', '.webm'].includes(ext)) sourceType = 'audio';
 
-      // Extract text based on file type
+    try {
+      // 1. Create initial source record in "processing" state
+      const initialSource = await query(
+        `INSERT INTO uploaded_sources (user_id, source_type, title, file_size, processing_status)
+         VALUES ($1, $2, $3, $4, 'processing')
+         RETURNING id, title, source_type, created_at`,
+        [req.user.id, sourceType, title, file.size || 0]
+      );
+      sourceId = initialSource.rows[0].id;
+
+      // 2. Extract text based on file type
+      let rawText = '';
       if (ext === '.pdf') {
-        sourceType = 'pdf';
-        const pdfData = await extractTextFromPDF(file.buffer);
-        rawText = pdfData.text;
+        try {
+          const pdfData = await extractTextFromPDF(file.buffer);
+          rawText = pdfData.text || '';
+        } catch (pdfErr) {
+          console.warn(`PDF extraction fallback for ${file.originalname}:`, pdfErr.message);
+          rawText = file.buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').trim();
+          if (rawText.length < 50) {
+            throw new Error(`PDF parse failed: ${pdfErr.message}`);
+          }
+        }
       } else if (['.ppt', '.pptx'].includes(ext)) {
-        sourceType = 'ppt';
-        // For PPT files, extract readable text from buffer
         rawText = file.buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
         if (rawText.length < 100) {
-          rawText = `PowerPoint presentation: ${file.originalname}. This presentation file requires specialized extraction for full content analysis.`;
+          rawText = `Presentation slides: ${file.originalname}. Analysis based on presentation asset.`;
         }
       } else if (['.mp3', '.mp4', '.wav', '.ogg', '.webm'].includes(ext)) {
-        sourceType = 'audio';
-        // For audio, we store metadata - transcription requires external service
-        rawText = `Audio file: ${file.originalname}. Duration and content require audio transcription processing.`;
-      } else if (['.txt', '.md'].includes(ext)) {
-        sourceType = 'text';
-        rawText = extractTextFromFile(file.buffer, file.mimetype);
+        rawText = `Audio recording: ${file.originalname}. Audio media research asset.`;
       } else {
-        rawText = file.buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').trim();
+        rawText = extractTextFromFile(file.buffer, file.mimetype) || file.buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').trim();
       }
 
-      const title = file.originalname.replace(/\.[^/.]+$/, '');
+      if (!rawText || rawText.trim().length === 0) {
+        throw new Error('Document contained no readable text.');
+      }
 
-      // Extract structured metadata using Gemini
+      // 3. Extract structured metadata with timeout & fallback
       let parsedMetadata = {};
-      if (rawText.length > 100) {
-        parsedMetadata = await extractResearchMetadata(rawText, title);
-      }
-
-      // Insert source record
-      const sourceResult = await query(
-        `INSERT INTO uploaded_sources (user_id, source_type, title, raw_text, parsed_metadata)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id, title, source_type, created_at`,
-        [req.user.id, sourceType, title, rawText, JSON.stringify(parsedMetadata)]
-      );
-
-      const source = sourceResult.rows[0];
-
-      // Chunk text and generate embeddings
       if (rawText.length > 50) {
-        const chunks = chunkText(rawText);
-
-        if (chunks.length > 0) {
-          const chunkTexts = chunks.map(c => c.content);
-          const embeddings = await generateBatchEmbeddings(chunkTexts);
-          await storeSourceChunks(source.id, chunks, embeddings);
+        try {
+          parsedMetadata = await extractResearchMetadata(rawText, title);
+        } catch (metaErr) {
+          console.warn(`Metadata extraction notice for ${title}:`, metaErr.message);
         }
       }
 
+      // 4. Chunk text and generate embeddings
+      const chunks = chunkText(rawText);
+      if (chunks.length > 0) {
+        const chunkTexts = chunks.map(c => c.content);
+        const embeddings = await generateBatchEmbeddings(chunkTexts);
+        await storeSourceChunks(sourceId, chunks, embeddings);
+      }
+
+      // 5. Update source record to "completed" state
+      await query(
+        `UPDATE uploaded_sources
+         SET raw_text = $1, parsed_metadata = $2, processing_status = 'completed', error_message = NULL
+         WHERE id = $3`,
+        [rawText, JSON.stringify(parsedMetadata || {}), sourceId]
+      );
+
       results.push({
-        id: source.id,
-        title: source.title,
-        source_type: source.source_type,
-        created_at: source.created_at,
+        id: sourceId,
+        title,
+        source_type: sourceType,
+        created_at: initialSource.rows[0].created_at,
+        processing_status: 'completed',
         metadata: parsedMetadata,
-        chunks_created: rawText.length > 50 ? chunkText(rawText).length : 0,
+        chunks_created: chunks.length,
       });
     } catch (fileError) {
       console.error(`Error processing file ${file.originalname}:`, fileError.message);
       errors.push({ filename: file.originalname, error: fileError.message });
+
+      // If source record was created, mark as failed rather than losing it
+      if (sourceId) {
+        try {
+          await query(
+            `UPDATE uploaded_sources
+             SET processing_status = 'failed', error_message = $1
+             WHERE id = $2`,
+            [fileError.message, sourceId]
+          );
+        } catch (dbErr) {
+          console.error('Failed updating source error status:', dbErr.message);
+        }
+      }
     }
   }
 
   res.status(201).json({
-    success: true,
-    message: `Processed ${results.length} file(s) successfully.${errors.length > 0 ? ` ${errors.length} file(s) failed.` : ''}`,
+    success: results.length > 0 || errors.length === 0,
+    message: results.length > 0
+      ? `Processed ${results.length} file(s) successfully.${errors.length > 0 ? ` ${errors.length} failed.` : ''}`
+      : `Processing failed: ${errors[0]?.error || 'Unknown error'}`,
     data: { results, errors },
   });
 });
@@ -334,12 +367,17 @@ router.get('/sources', async (req, res) => {
       `SELECT us.id, 
               COALESCE(us.source_type, 'document') as source_type, 
               COALESCE(us.title, 'Untitled Asset') as title, 
-              us.storage_url, us.parsed_metadata, us.created_at,
+              us.storage_url, 
+              us.parsed_metadata, 
+              COALESCE(us.processing_status, 'completed') as processing_status,
+              us.error_message,
+              COALESCE(us.file_size, 0) as file_size,
+              us.created_at,
               COUNT(se.id)::int as chunk_count
        FROM uploaded_sources us
        LEFT JOIN source_embeddings se ON se.source_id = us.id
        WHERE us.user_id = $1
-       GROUP BY us.id, us.source_type, us.title, us.storage_url, us.parsed_metadata, us.created_at
+       GROUP BY us.id, us.source_type, us.title, us.storage_url, us.parsed_metadata, us.processing_status, us.error_message, us.file_size, us.created_at
        ORDER BY us.created_at DESC`,
       [req.user.id]
     );
@@ -351,6 +389,80 @@ router.get('/sources', async (req, res) => {
   } catch (error) {
     console.error('List sources error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch sources.' });
+  }
+});
+
+/**
+ * POST /api/v1/ingest/sources/:sourceId/retry
+ * Retry processing an existing failed or un-vectorized source
+ */
+router.post('/sources/:sourceId/retry', async (req, res) => {
+  const { sourceId } = req.params;
+  try {
+    const sourceRes = await query(
+      `SELECT id, user_id, source_type, title, raw_text, parsed_metadata
+       FROM uploaded_sources
+       WHERE id = $1 AND user_id = $2`,
+      [sourceId, req.user.id]
+    );
+
+    if (sourceRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Source not found.' });
+    }
+
+    const source = sourceRes.rows[0];
+    if (!source.raw_text || source.raw_text.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No extractable text was saved for this document. Please re-upload the file.'
+      });
+    }
+
+    // Mark as processing
+    await query(
+      `UPDATE uploaded_sources SET processing_status = 'processing', error_message = NULL WHERE id = $1`,
+      [sourceId]
+    );
+
+    // Delete any old chunks
+    await query(`DELETE FROM source_embeddings WHERE source_id = $1`, [sourceId]);
+
+    // Re-chunk and re-embed
+    const chunks = chunkText(source.raw_text);
+    if (chunks.length > 0) {
+      const chunkTexts = chunks.map(c => c.content);
+      const embeddings = await generateBatchEmbeddings(chunkTexts);
+      await storeSourceChunks(sourceId, chunks, embeddings);
+    }
+
+    // Update to completed
+    await query(
+      `UPDATE uploaded_sources
+       SET processing_status = 'completed', error_message = NULL
+       WHERE id = $1`,
+      [sourceId]
+    );
+
+    res.json({
+      success: true,
+      message: `Successfully reprocessed "${source.title}". (${chunks.length} chunks generated)`,
+      data: {
+        id: source.id,
+        title: source.title,
+        chunks_created: chunks.length,
+        processing_status: 'completed'
+      }
+    });
+  } catch (err) {
+    console.error(`Retry processing error for source ${sourceId}:`, err.message);
+    await query(
+      `UPDATE uploaded_sources SET processing_status = 'failed', error_message = $1 WHERE id = $2`,
+      [err.message, sourceId]
+    );
+    res.status(500).json({
+      success: false,
+      message: `Retry failed: ${err.message}`
+    });
   }
 });
 

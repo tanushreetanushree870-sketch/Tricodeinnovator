@@ -24,14 +24,26 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: handle auth errors
+// Response interceptor: handle auth errors safely without kicking user on upload failures
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Only redirect to /login on genuine auth session failures, never for upload errors
     if (error.response?.status === 401) {
-      localStorage.removeItem('rp_token');
-      localStorage.removeItem('rp_user');
-      window.location.href = '/login';
+      const url = error.config?.url || '';
+      const isAuthCheck = url.includes('/auth/me');
+      const isTokenExpired = error.response?.data?.message?.toLowerCase().includes('token has expired') ||
+                             error.response?.data?.message?.toLowerCase().includes('invalid token');
+
+      // Do NOT redirect if it was a file upload or ingestion endpoint
+      const isIngestEndpoint = url.includes('/ingest/');
+
+      if ((isAuthCheck || isTokenExpired) && !isIngestEndpoint) {
+        console.warn('[Auth Service] Session expired, redirecting to login.');
+        localStorage.removeItem('rp_token');
+        localStorage.removeItem('rp_user');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -49,11 +61,13 @@ export const ingestAPI = {
   uploadFiles: (formData, onProgress) =>
     api.post('/ingest/file', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000, // 3 minutes timeout for multi-file processing
       onUploadProgress: (e) => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
     }),
   ingestURL: (data) => api.post('/ingest/url', data),
   ingestAnki: (data) => api.post('/ingest/anki', data),
   getSources: () => api.get('/ingest/sources'),
+  retrySource: (id) => api.post(`/ingest/sources/${id}/retry`),
   deleteSource: (id) => api.delete(`/ingest/sources/${id}`),
 };
 

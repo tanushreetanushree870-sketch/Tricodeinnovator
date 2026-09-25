@@ -35,6 +35,21 @@ export default function Dashboard() {
 
   useEffect(() => { fetchSources(); }, []);
 
+  const [retryingId, setRetryingId] = useState(null);
+
+  const handleRetry = async (id, title) => {
+    setRetryingId(id);
+    try {
+      const res = await ingestAPI.retrySource(id);
+      toast.success(res.data?.message || `Successfully reprocessed "${title}"!`);
+      await fetchSources();
+    } catch (err) {
+      toast.error(err.response?.data?.message || `Failed to reprocess "${title}"`);
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   const handleDelete = async (id, title) => {
     if (!confirm(`Delete "${title}"?`)) return;
     try {
@@ -120,27 +135,65 @@ export default function Dashboard() {
                   const displayTitle = source?.title || 'Untitled Research Asset';
                   const dateStr = source?.created_at ? new Date(source.created_at).toLocaleDateString() : 'Recent';
                   const chunkStr = source?.chunk_count != null ? `${source.chunk_count} chunks` : '';
+                  const status = source?.processing_status || 'completed';
+                  const isRetrying = retryingId === source.id;
+
                   return (
                     <motion.div key={source.id || i} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.05 }}
                       className="flex items-center gap-3 p-4 rounded-xl transition-all group"
-                      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(99,102,241,0.1)' }}
-                      onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(99,102,241,0.3)'}
-                      onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(99,102,241,0.1)'}
+                      style={{
+                        background: status === 'failed' ? 'rgba(239,68,68,0.03)' : 'rgba(255,255,255,0.02)',
+                        border: status === 'failed' ? '1px solid rgba(239,68,68,0.2)' : '1px solid rgba(99,102,241,0.1)'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = status === 'failed' ? 'rgba(239,68,68,0.4)' : 'rgba(99,102,241,0.3)'}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = status === 'failed' ? 'rgba(239,68,68,0.2)' : '1px solid rgba(99,102,241,0.1)'}
                     >
                       <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
                         style={{ background: cfg.bg }}>
                         <Icon size={18} style={{ color: cfg.color }} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate" style={{ color: '#f1f5f9' }}>{displayTitle}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-sm truncate" style={{ color: '#f1f5f9' }}>{displayTitle}</p>
+                          {status === 'failed' && (
+                            <span className="text-[10px] px-2 py-0.5 rounded font-semibold shrink-0"
+                              style={{ background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+                              Processing failed
+                            </span>
+                          )}
+                          {status === 'processing' && (
+                            <span className="text-[10px] px-2 py-0.5 rounded font-semibold shrink-0 flex items-center gap-1"
+                              style={{ background: 'rgba(245,158,11,0.2)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>
+                              <RefreshCw size={9} className="animate-spin" /> Vectorizing
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="badge badge-primary text-xs">{sType.toUpperCase()}</span>
                           <span className="text-xs" style={{ color: '#64748b' }}>
-                            {chunkStr ? `${chunkStr} · ` : ''}{dateStr}
+                            {status === 'failed'
+                              ? (source.error_message ? `Error: ${source.error_message.slice(0, 45)}` : 'Processing error')
+                              : `${chunkStr ? `${chunkStr} · ` : ''}${dateStr}`
+                            }
                           </span>
                         </div>
                       </div>
+
+                      {/* Retry Button if failed */}
+                      {status === 'failed' && (
+                        <button
+                          onClick={() => handleRetry(source.id, displayTitle)}
+                          disabled={isRetrying}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all"
+                          style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }}
+                          title="Retry processing and embedding"
+                        >
+                          <RefreshCw size={12} className={isRetrying ? 'animate-spin' : ''} />
+                          {isRetrying ? 'Retrying...' : 'Retry'}
+                        </button>
+                      )}
+
                       <button onClick={() => handleDelete(source.id, displayTitle)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg"
                         style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)' }}>

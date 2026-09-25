@@ -19,6 +19,8 @@ export default function FileUploader({ onUploadComplete }) {
   const [activeTab, setActiveTab] = useState('file');
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [stage, setStage] = useState('idle'); // idle | uploading | uploaded | extracting | embedding | saving | completed | failed
+  const [errorMessage, setErrorMessage] = useState('');
 
   // Anki state
   const [ankiDeckName, setAnkiDeckName] = useState('');
@@ -29,6 +31,8 @@ export default function FileUploader({ onUploadComplete }) {
     setDragOver(false);
     const dropped = Array.from(e.dataTransfer?.files || e.target.files || []);
     setFiles(prev => [...prev, ...dropped.map(f => ({ file: f, status: 'pending', id: Math.random() }))]);
+    setStage('idle');
+    setErrorMessage('');
   }, []);
 
   const removeFile = (id) => setFiles(prev => prev.filter(f => f.id !== id));
@@ -36,25 +40,57 @@ export default function FileUploader({ onUploadComplete }) {
   const handleFileUpload = async () => {
     if (files.length === 0) return toast.error('Please select files first');
     setUploading(true);
+    setStage('uploading');
     setProgress(0);
+    setErrorMessage('');
+
+    let stageTimer1, stageTimer2, stageTimer3;
+
     const formData = new FormData();
     files.forEach(f => formData.append('files', f.file));
+
     try {
-      const res = await ingestAPI.uploadFiles(formData, setProgress);
-      const { results, errors } = res.data.data;
+      const res = await ingestAPI.uploadFiles(formData, (pct) => {
+        setProgress(pct);
+        if (pct >= 100) {
+          setStage('uploaded');
+          stageTimer1 = setTimeout(() => setStage('extracting'), 1200);
+          stageTimer2 = setTimeout(() => setStage('embedding'), 4000);
+          stageTimer3 = setTimeout(() => setStage('saving'), 8000);
+        }
+      });
+
+      clearTimeout(stageTimer1);
+      clearTimeout(stageTimer2);
+      clearTimeout(stageTimer3);
+
+      const { results, errors } = res.data.data || { results: [], errors: [] };
       if (results.length > 0) {
-        toast.success(`✅ ${results.length} file(s) processed successfully!`);
+        setStage('completed');
+        toast.success(`✅ ${results.length} file(s) processed and added to library!`);
         onUploadComplete?.();
-        setFiles([]);
-      }
-      if (errors.length > 0) {
-        toast.error(`${errors.length} file(s) failed: ${errors[0].error}`);
+        setTimeout(() => {
+          setFiles([]);
+          setStage('idle');
+          setUploading(false);
+        }, 1800);
+      } else if (errors.length > 0) {
+        const firstErr = errors[0]?.error || 'Document processing failed.';
+        setStage('failed');
+        setErrorMessage(firstErr);
+        toast.error(`Processing error: ${firstErr}`);
       }
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Upload failed');
+      clearTimeout(stageTimer1);
+      clearTimeout(stageTimer2);
+      clearTimeout(stageTimer3);
+      const msg = err.response?.data?.message || err.message || 'Upload & processing failed';
+      setStage('failed');
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
+      // Guaranteed cleanup: processing/uploading cannot stay stuck permanently
       setUploading(false);
-      setProgress(0);
     }
   };
 
@@ -167,21 +203,95 @@ export default function FileUploader({ onUploadComplete }) {
               </div>
             )}
 
-            {/* Progress Bar */}
+            {/* Stage Indicator & Progress Bar */}
             {uploading && (
-              <div className="mb-4">
-                <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
-                  <span>Uploading & vectorizing...</span>
-                  <span>{progress}%</span>
+              <div className="mb-4 p-3 rounded-xl" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}>
+                <div className="flex justify-between items-center text-xs mb-2">
+                  <div className="flex items-center gap-2 font-medium" style={{ color: '#818cf8' }}>
+                    <Loader2 size={13} className="animate-spin text-indigo-400" />
+                    <span>
+                      {stage === 'uploading' && `Uploading to cloud... (${progress}%)`}
+                      {stage === 'uploaded' && 'Upload complete. Initializing pipeline...'}
+                      {stage === 'extracting' && 'Extracting text & research structure...'}
+                      {stage === 'embedding' && 'Generating 768-dim embeddings...'}
+                      {stage === 'saving' && 'Saving chunks to knowledge library...'}
+                      {stage === 'completed' && '✅ Ingestion completed!'}
+                    </span>
+                  </div>
+                  <span className="font-mono text-xs" style={{ color: '#64748b' }}>
+                    {stage === 'uploading' ? `${progress}%` : '100%'}
+                  </span>
                 </div>
                 <div className="xp-bar">
-                  <div className="xp-bar-fill" style={{ width: `${progress}%` }} />
+                  <div
+                    className="xp-bar-fill transition-all duration-300"
+                    style={{
+                      width: stage === 'uploading' ? `${progress}%` : '100%',
+                      background: stage === 'completed'
+                        ? '#10b981'
+                        : 'linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4)'
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between items-center text-[10px] mt-2" style={{ color: '#64748b' }}>
+                  <span className={stage === 'uploading' || stage === 'uploaded' ? 'text-indigo-400 font-semibold' : ''}>1. Upload</span>
+                  <span>→</span>
+                  <span className={stage === 'extracting' ? 'text-indigo-400 font-semibold' : ''}>2. Extract Text</span>
+                  <span>→</span>
+                  <span className={stage === 'embedding' ? 'text-indigo-400 font-semibold' : ''}>3. Embed</span>
+                  <span>→</span>
+                  <span className={stage === 'saving' || stage === 'completed' ? 'text-emerald-400 font-semibold' : ''}>4. Library</span>
                 </div>
               </div>
             )}
 
-            <button onClick={handleFileUpload} disabled={uploading || files.length === 0} className="btn-primary w-full justify-center">
-              {uploading ? <><Loader2 size={16} className="animate-spin" /> Processing...</> : <><Upload size={16} /> Upload & Vectorize</>}
+            {/* Error Message with Retry */}
+            {stage === 'failed' && (
+              <div className="p-3.5 rounded-xl mb-4" style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+                <div className="flex items-center gap-2 mb-1.5" style={{ color: '#ef4444' }}>
+                  <AlertCircle size={16} className="shrink-0" />
+                  <span className="font-semibold text-xs">Processing Failed</span>
+                </div>
+                <p className="text-xs mb-3" style={{ color: '#fca5a5', lineHeight: '1.4' }}>
+                  {errorMessage || 'Document processing was interrupted. You can retry processing without re-selecting files.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleFileUpload}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+                  style={{ background: '#ef4444', color: 'white' }}
+                >
+                  <Upload size={13} />
+                  Retry Processing
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={handleFileUpload}
+              disabled={uploading || files.length === 0}
+              className="btn-primary w-full justify-center py-2.5"
+            >
+              {uploading ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  {stage === 'uploading' && `Uploading... (${progress}%)`}
+                  {stage === 'uploaded' && 'Upload complete'}
+                  {stage === 'extracting' && 'Extracting text...'}
+                  {stage === 'embedding' && 'Generating embeddings...'}
+                  {stage === 'saving' && 'Saving to knowledge library...'}
+                </>
+              ) : stage === 'completed' ? (
+                <>
+                  <CheckCircle size={16} style={{ color: '#10b981' }} />
+                  Completed
+                </>
+              ) : (
+                <>
+                  <Upload size={16} />
+                  Upload & Vectorize
+                </>
+              )}
             </button>
           </motion.div>
         )}

@@ -61,10 +61,11 @@ const seedDemoData = async (poolInstance) => {
 
     if (existing.rows.length === 0) {
       console.log('🌱 Seeding demo user and academic profile...');
+      const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
       const userRes = await poolInstance.query(
-        `INSERT INTO users (email, password_hash, full_name)
-         VALUES ($1, $2, $3) RETURNING id`,
-        ['demo@researchpilot.ai', hash, 'Dr. Alex Vance']
+        `INSERT INTO users (id, email, password_hash, full_name)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [DEMO_USER_ID, 'demo@researchpilot.ai', hash, 'Dr. Alex Vance']
       );
       userId = userRes.rows[0].id;
 
@@ -238,9 +239,21 @@ export const initializeDatabase = async () => {
         storage_url TEXT,
         raw_text TEXT,
         parsed_metadata JSONB DEFAULT '{}'::jsonb,
+        processing_status VARCHAR(50) DEFAULT 'completed',
+        error_message TEXT,
+        file_size BIGINT DEFAULT 0,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Migration columns for existing databases
+    try {
+      await client.query(`ALTER TABLE uploaded_sources ADD COLUMN IF NOT EXISTS processing_status VARCHAR(50) DEFAULT 'completed';`);
+      await client.query(`ALTER TABLE uploaded_sources ADD COLUMN IF NOT EXISTS error_message TEXT;`);
+      await client.query(`ALTER TABLE uploaded_sources ADD COLUMN IF NOT EXISTS file_size BIGINT DEFAULT 0;`);
+    } catch (migErr) {
+      // Ignore if columns already exist or in-memory DB doesn't support ALTER
+    }
 
     // Source embeddings table
     if (isPostgres) {
