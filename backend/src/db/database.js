@@ -159,6 +159,58 @@ const seedDemoData = async (poolInstance) => {
           [crypto.randomUUID(), userId, s.title, s.type, s.start.toISOString(), s.end.toISOString(), s.color]
         );
       }
+
+      // Seed sample YouTube source if none exists
+      const existingSources = await poolInstance.query(
+        'SELECT id FROM uploaded_sources WHERE user_id = $1 LIMIT 1',
+        [userId]
+      );
+      if (existingSources.rows.length === 0) {
+        const demoSourceId = '11111111-1111-1111-1111-111111111111';
+        const demoMetadata = {
+          title: 'YouTube Video: xKxo-GrmzE0',
+          url: 'https://www.youtube.com/watch?v=xKxo-GrmzE0',
+          author: 'AI Research Lecture Series',
+          publication_date: '2026-09-25',
+          research_type: 'lecture',
+          abstract_summary: 'Comprehensive overview of multimodal deep learning foundations, cross-attention mechanisms, and contrastive pretraining architectures (CLIP).',
+          methodology: 'Multimodal Transformer Architecture & Contrastive Learning',
+          datasets: 'OpenAI CLIP WebImageText & Video-Audio Datasets',
+          results: 'State of the art zero-shot classification and cross-modal retrieval performance',
+          limitations: 'Requires substantial compute for large batch size contrastive training',
+          keywords: ['multimodal', 'transformers', 'cross-attention', 'CLIP', 'vector embeddings'],
+        };
+        const demoRawText = 'Multimodal Deep Learning and Cross-Attention Transformers video lecture transcript covering joint embedding spaces, contrastive language-image pretraining (CLIP), and vector retrieval optimization.';
+
+        await poolInstance.query(
+          `INSERT INTO uploaded_sources (id, user_id, source_type, title, storage_url, raw_text, parsed_metadata, processing_status, file_size)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            demoSourceId,
+            userId,
+            'youtube',
+            'YouTube Video: xKxo-GrmzE0',
+            'https://www.youtube.com/watch?v=xKxo-GrmzE0',
+            demoRawText,
+            JSON.stringify(demoMetadata),
+            'completed',
+            1048576,
+          ]
+        );
+
+        await poolInstance.query(
+          `INSERT INTO source_embeddings (source_id, chunk_content, page_or_timestamp, embedding)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            demoSourceId,
+            demoRawText,
+            '00:00 - 15:30',
+            `[${new Array(768).fill(0.01).join(',')}]`,
+          ]
+        );
+        console.log('✅ Demo source seeded: YouTube Video: xKxo-GrmzE0');
+      }
+
       console.log('✅ Demo user seeded: demo@researchpilot.ai / password123');
   } catch (err) {
     console.warn('Notice during demo seeding:', err.message);

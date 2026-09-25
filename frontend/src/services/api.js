@@ -67,6 +67,7 @@ export const ingestAPI = {
   ingestURL: (data) => api.post('/ingest/url', data),
   ingestAnki: (data) => api.post('/ingest/anki', data),
   getSources: () => api.get('/ingest/sources'),
+  getSourceDetails: (id) => api.get(`/ingest/sources/${id}`),
   retrySource: (id) => api.post(`/ingest/sources/${id}/retry`),
   deleteSource: (id) => api.delete(`/ingest/sources/${id}`),
 };

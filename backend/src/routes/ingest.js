@@ -382,13 +382,81 @@ router.get('/sources', async (req, res) => {
       [req.user.id]
     );
 
+    const rows = result.rows.map(row => {
+      let meta = row.parsed_metadata;
+      if (typeof meta === 'string') {
+        try { meta = JSON.parse(meta); } catch { meta = {}; }
+      }
+      return { ...row, parsed_metadata: meta };
+    });
+
     res.json({
       success: true,
-      data: result.rows,
+      data: rows,
     });
   } catch (error) {
     console.error('List sources error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch sources.' });
+  }
+});
+
+/**
+ * GET /api/v1/ingest/sources/:sourceId
+ * Get detailed source information including chunks and metadata
+ */
+router.get('/sources/:sourceId', async (req, res) => {
+  const { sourceId } = req.params;
+  try {
+    const sourceRes = await query(
+      `SELECT us.id, 
+              COALESCE(us.source_type, 'document') as source_type, 
+              COALESCE(us.title, 'Untitled Asset') as title, 
+              us.storage_url, 
+              us.raw_text,
+              us.parsed_metadata, 
+              COALESCE(us.processing_status, 'completed') as processing_status,
+              us.error_message,
+              COALESCE(us.file_size, 0) as file_size,
+              us.created_at
+       FROM uploaded_sources us
+       WHERE us.id = $1 AND us.user_id = $2`,
+      [sourceId, req.user.id]
+    );
+
+    if (sourceRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Source not found.' });
+    }
+
+    const source = sourceRes.rows[0];
+
+    if (typeof source.parsed_metadata === 'string') {
+      try {
+        source.parsed_metadata = JSON.parse(source.parsed_metadata);
+      } catch (e) {
+        source.parsed_metadata = {};
+      }
+    }
+
+    // Fetch associated chunks
+    const chunksRes = await query(
+      `SELECT id, chunk_content, page_or_timestamp
+       FROM source_embeddings
+       WHERE source_id = $1
+       ORDER BY id ASC`,
+      [sourceId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...source,
+        chunk_count: chunksRes.rows.length,
+        chunks: chunksRes.rows,
+      },
+    });
+  } catch (error) {
+    console.error(`Get source details error for ${sourceId}:`, error.message);
+    res.status(500).json({ success: false, message: `Failed to fetch source details: ${error.message}` });
   }
 });
 
