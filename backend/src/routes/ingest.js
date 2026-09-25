@@ -331,12 +331,15 @@ router.post('/anki', async (req, res) => {
 router.get('/sources', async (req, res) => {
   try {
     const result = await query(
-      `SELECT us.id, us.source_type, us.title, us.storage_url, us.parsed_metadata, us.created_at,
+      `SELECT us.id, 
+              COALESCE(us.source_type, 'document') as source_type, 
+              COALESCE(us.title, 'Untitled Asset') as title, 
+              us.storage_url, us.parsed_metadata, us.created_at,
               COUNT(se.id)::int as chunk_count
        FROM uploaded_sources us
        LEFT JOIN source_embeddings se ON se.source_id = us.id
        WHERE us.user_id = $1
-       GROUP BY us.id
+       GROUP BY us.id, us.source_type, us.title, us.storage_url, us.parsed_metadata, us.created_at
        ORDER BY us.created_at DESC`,
       [req.user.id]
     );

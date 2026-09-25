@@ -114,10 +114,14 @@ export default function Dashboard() {
             ) : (
               <div className="space-y-3 overflow-y-auto" style={{ maxHeight: 480 }}>
                 {sources.map((source, i) => {
-                  const cfg = sourceIcons[source.source_type] || sourceIcons.text;
+                  const sType = source?.source_type || 'text';
+                  const cfg = sourceIcons[sType] || sourceIcons.text;
                   const Icon = cfg.icon;
+                  const displayTitle = source?.title || 'Untitled Research Asset';
+                  const dateStr = source?.created_at ? new Date(source.created_at).toLocaleDateString() : 'Recent';
+                  const chunkStr = source?.chunk_count != null ? `${source.chunk_count} chunks` : '';
                   return (
-                    <motion.div key={source.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                    <motion.div key={source.id || i} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.05 }}
                       className="flex items-center gap-3 p-4 rounded-xl transition-all group"
                       style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(99,102,241,0.1)' }}
@@ -129,15 +133,15 @@ export default function Dashboard() {
                         <Icon size={18} style={{ color: cfg.color }} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate" style={{ color: '#f1f5f9' }}>{source.title}</p>
+                        <p className="font-medium text-sm truncate" style={{ color: '#f1f5f9' }}>{displayTitle}</p>
                         <div className="flex items-center gap-2 mt-0.5">
-                          <span className="badge badge-primary text-xs">{source.source_type.toUpperCase()}</span>
+                          <span className="badge badge-primary text-xs">{sType.toUpperCase()}</span>
                           <span className="text-xs" style={{ color: '#64748b' }}>
-                            {source.chunk_count} chunks · {new Date(source.created_at).toLocaleDateString()}
+                            {chunkStr ? `${chunkStr} · ` : ''}{dateStr}
                           </span>
                         </div>
                       </div>
-                      <button onClick={() => handleDelete(source.id, source.title)}
+                      <button onClick={() => handleDelete(source.id, displayTitle)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-lg"
                         style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)' }}>
                         <Trash2 size={14} />
